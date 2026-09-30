@@ -31,6 +31,22 @@ export function dateToFileTime(d: Date): string {
 }
 
 /**
+ * Not every AD timestamp is a FILETIME. `whenCreated` and `whenChanged` are
+ * LDAP generalized time: "YYYYMMDDHHMMSS.0Z". Feeding one of those to
+ * fileTimeToDate() yields NaN, which is how this bug shipped the first time.
+ */
+export function generalizedTimeToDate(gt: string | undefined): Date | null {
+  if (!gt) return null;
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(gt);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const date = new Date(
+    Date.UTC(+y, +mo - 1, +d, +h, +mi, +s)
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
  * userAccountControl is a bitfield. We only read two flags.
  * https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/useraccountcontrol-manipulate-account-properties
  */
@@ -65,9 +81,15 @@ async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
 }
 
 function str(e: Entry, k: string): string | undefined {
-  const v = e[k];
+  let v: unknown = e[k];
+  if (Array.isArray(v)) v = v[0];
   if (v === undefined || v === null) return undefined;
-  return Array.isArray(v) ? String(v[0]) : String(v);
+  if (Buffer.isBuffer(v)) v = v.toString('utf8');
+  const s = String(v).trim();
+  // ldapts can hand back an entry whose absent attributes stringify to
+  // "undefined" rather than being omitted. Treat that as missing.
+  if (s === '' || s === 'undefined' || s === 'null') return undefined;
+  return s;
 }
 
 export interface AdUser {
@@ -84,7 +106,7 @@ export interface AdUser {
 function toUser(e: Entry): AdUser {
   const flags = uacFlags(str(e, 'userAccountControl'));
   const last = fileTimeToDate(str(e, 'lastLogonTimestamp'));
-  const created = fileTimeToDate(str(e, 'whenCreated')) ?? null;
+  const created = generalizedTimeToDate(str(e, 'whenCreated'));
   return {
     samAccountName: str(e, 'sAMAccountName') ?? '(unknown)',
     displayName: str(e, 'displayName'),
