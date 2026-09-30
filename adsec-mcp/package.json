@@ -1,0 +1,26 @@
+{
+  "name": "adsec-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Read-only MCP server exposing Active Directory queries, plus an Ollama agent loop",
+  "scripts": {
+    "build": "tsc",
+    "server": "node dist/server.js",
+    "agent": "node dist/agent.js",
+    "dev:server": "tsx src/server.ts",
+    "dev:agent": "tsx src/agent.ts",
+    "inspect": "npx @modelcontextprotocol/inspector tsx src/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.5",
+    "ldapts": "^7.0.12",
+    "ollama": "^0.5.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  }
+}
