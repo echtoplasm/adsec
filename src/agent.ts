@@ -21,11 +21,15 @@ import 'dotenv/config';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Ollama } from 'ollama';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { createInterface } from 'node:readline/promises';
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'qwen3:8b';
 const MAX_STEPS = Number(process.env.MAX_STEPS ?? 6);
+const NUM_CTX = Number(process.env.NUM_CTX ?? 8192);
+/** Set THINK=1 to let a reasoning model emit its thinking block. */
+const THINK = process.env.THINK === '1';
 
 const SYSTEM_PROMPT = `You are a read-only Active Directory assistant for the lab.local domain.
 
@@ -70,7 +74,17 @@ async function main() {
     },
   }));
 
-  const ollama = new Ollama({ host: OLLAMA_HOST });
+  // Node's global fetch (undici) gives up after ~5 minutes waiting for
+  // response HEADERS. Ollama sends none until generation completes, so a
+  // slow CPU-only model blows that window and you get a confusing
+  // UND_ERR_HEADERS_TIMEOUT rather than "the model is just slow".
+  // Disable both header and body timeouts; MAX_STEPS is the real bound.
+  const dispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+  const ollama = new Ollama({
+    host: OLLAMA_HOST,
+    fetch: ((input: any, init: any) =>
+      undiciFetch(input, { ...init, dispatcher })) as unknown as typeof fetch,
+  });
 
   const ask = async (userText: string) => {
     const messages: any[] = [
@@ -79,12 +93,24 @@ async function main() {
     ];
 
     for (let step = 1; step <= MAX_STEPS; step++) {
-      const res = await ollama.chat({
+      const req: any = {
         model: OLLAMA_MODEL,
         messages,
         tools: ollamaTools,
-        options: { temperature: 0 }, // determinism matters more than flair here
-      });
+        options: {
+          temperature: 0, // determinism matters more than flair here
+          num_ctx: NUM_CTX,
+        },
+      };
+      // Thinking models (qwen3, deepseek-r1) emit a long reasoning block
+      // before answering. On CPU every one of those tokens costs real time,
+      // and for "call a tool, summarize the result" it buys little.
+      if (!THINK) req.think = false;
+
+      // `req` is `any` (to carry the optional `think` field), which makes TS
+      // resolve chat() to its streaming overload. We never stream, so the
+      // result is a plain ChatResponse.
+      const res: any = await ollama.chat(req);
 
       const msg = res.message;
       messages.push(msg);
